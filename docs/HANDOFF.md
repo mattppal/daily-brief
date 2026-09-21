@@ -6,13 +6,13 @@ You own the morning wake/routine. This repo owns two things: turning brief Markd
 
 ```sh
 # real print
-cat brief.md | python3 print_brief.py
+cat brief.md | bun print_brief.ts
 
 # or from a file
-python3 print_brief.py --input brief.md
+bun print_brief.ts --input brief.md
 ```
 
-Requirements on the host that runs it: Python 3.10+ and CUPS (`lp`/`lpstat`). macOS has CUPS built in; on Debian/Ubuntu `apt install cups-client`. No pip packages, no bun, nothing else.
+Requirements on the host that runs it: [Bun](https://bun.sh) (`brew install oven-sh/bun/bun` or `curl -fsSL https://bun.sh/install | bash`) and CUPS (`lp`/`lpstat`). macOS has CUPS built in; on Debian/Ubuntu `apt install cups-client`. No `bun install` is needed to run — the script uses only `node:` built-ins. If Bun is unavailable, `node --experimental-strip-types print_brief.ts …` works on Node 22.6+.
 
 **The host must be able to reach the printer** (same LAN, or a `CUPS_SERVER` that can). If your routine runs somewhere else, trigger this command on Matt's Mac / a Pi rather than running it where you are.
 
@@ -20,7 +20,7 @@ Requirements on the host that runs it: Python 3.10+ and CUPS (`lp`/`lpstat`). ma
 
 | When | What |
 |---|---|
-| 06:45 local, Mon–Fri | Assemble the brief as Markdown → pipe into `print_brief.py` |
+| 06:45 local, Mon–Fri | Assemble the brief as Markdown → pipe into `print_brief.ts` |
 | Any time you change the brief format | Run with `--dry-run` first and inspect `out/brief-YYYY-MM-DD.txt` |
 | Once at setup | Confirm `lpstat -p "$PRINTER_NAME"` shows the queue |
 
@@ -32,29 +32,37 @@ Assumption: you already produce the brief; this script only formats and prints i
 
 Keep it under ~2 pages (roughly 120 lines at 80 columns) — CUPS paginates automatically.
 
+## Matt's printer
+
+| | |
+|---|---|
+| Model | Brother HL-L2370DW — mono laser, auto duplex, Letter |
+| CUPS queue on Matt's Mac | `Brother_HL_L2370DW_series` (system default) |
+| Device URI | `ipp://BRWCC6B1E08C933.local.:631/ipp/print` (AirPrint / IPP Everywhere) |
+
+Check it's there: `lpstat -p Brother_HL_L2370DW_series`. List supported options (paper sizes, duplex modes, etc.): `lpoptions -p Brother_HL_L2370DW_series -l`.
+
+### Recreating the queue on another LAN host (e.g. a Pi)
+
+```sh
+lpadmin -p Brother_HL_L2370DW_series -E -v ipp://BRWCC6B1E08C933.local.:631/ipp/print -m everywhere
+lpstat -p Brother_HL_L2370DW_series
+```
+
+The `.local.` hostname is mDNS — on Linux install `avahi-daemon` (and `libnss-mdns`) first, or substitute the printer's IP address in the URI.
+
 ## Environment variables
 
 Copy `.env.example` to `.env` next to the script (or export them). `.env` is gitignored; never commit real values.
 
-| Var | Required | Meaning |
-|---|---|---|
-| `PRINTER_NAME` | for real prints | CUPS queue name from `lpstat -p` |
-| `CUPS_SERVER` | no | `host[:port]` of a remote CUPS server; `lp` honors it natively |
-| `LP_OPTIONS` | no | extra `lp` flags, e.g. `-o media=Letter -o sides=one-sided` |
-| `BRIEF_OUT_DIR` | no | where rendered text is written (default `out/`) |
+| Var | Required | Example | Meaning |
+|---|---|---|---|
+| `PRINTER_NAME` | for real prints | `Brother_HL_L2370DW_series` | CUPS queue name from `lpstat -p` |
+| `CUPS_SERVER` | no | `matts-mac.local` | `host[:port]` of a remote CUPS server; `lp` honors it natively |
+| `LP_OPTIONS` | no | `-o media=Letter -o sides=two-sided-long-edge` | extra `lp` flags; use `sides=one-sided` if Matt prefers single-sided |
+| `BRIEF_OUT_DIR` | no | `out` | where rendered text is written (default `out/`) |
 
 `--printer NAME` overrides `PRINTER_NAME`; `--env-file PATH` picks a different dotenv.
-
-### Adding the printer once
-
-If `lpstat -p` shows nothing useful, create a queue for any IPP/AirPrint printer:
-
-```sh
-lpadmin -p daily-brief -E -v ipp://<printer-hostname-or-ip>/ipp/print -m everywhere
-lpstat -p daily-brief
-```
-
-Then `PRINTER_NAME=daily-brief`.
 
 ## Failure behavior
 
@@ -73,7 +81,7 @@ The rendered text is always written to `out/brief-YYYY-MM-DD.txt` (even on real 
 ## Dry run (no paper)
 
 ```sh
-python3 print_brief.py --dry-run --input examples/sample-brief.md
+bun print_brief.ts --dry-run --input examples/sample-brief.md   # or: bun run dry-run
 cat out/brief-$(date +%F).txt
 ```
 
