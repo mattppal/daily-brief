@@ -2,11 +2,12 @@
 
 Grok Bot morning brief → physical printer.
 
-A Grok Bot teammate ("Eng") assembles Matt's brief as Markdown each morning and pipes it into `print_brief.ts`, which renders it to printer-friendly text and sends it to a CUPS/IPP printer with `lp`. One TypeScript file, `node:` built-ins only, zero runtime dependencies. Runs with [Bun](https://bun.sh) (or `node --experimental-strip-types` on Node 22.6+).
+A Grok Bot teammate ("Eng") assembles Matt's brief as Markdown each morning and pipes it into `print_brief.ts`, which renders it to a minimalist one-column PDF (Letter, 1" margins, Courier) and sends it to a CUPS/IPP printer with `lp`. One TypeScript file, `node:` built-ins only, zero runtime dependencies — the PDF is written by hand so the same file prints identically on any host. Runs with [Bun](https://bun.sh) (or `node --experimental-strip-types` on Node 22.6+).
 
 ```sh
-# dry run: render to out/brief-YYYY-MM-DD.txt, print nothing
+# dry run: render to out/brief-YYYY-MM-DD.pdf (+ .txt), print nothing
 bun print_brief.ts --dry-run --input examples/sample-brief.md   # or: bun run dry-run
+open out/brief-*.pdf                                            # this exact file is what lp sends
 
 # real print (needs PRINTER_NAME in .env or the environment)
 cp .env.example .env   # PRINTER_NAME=Brother_HL_L2370DW_series is pre-filled

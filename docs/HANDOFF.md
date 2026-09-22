@@ -1,6 +1,6 @@
 # Handoff for Eng (Grok Bot morning routine)
 
-You own the morning wake/routine. This repo owns two things: turning brief Markdown into printer-friendly text, and getting it onto Matt's printer via CUPS. Everything runs from one command.
+You own the morning wake/routine. This repo owns two things: turning brief Markdown into a minimalist one-column PDF, and getting it onto Matt's printer via CUPS. Everything runs from one command.
 
 ## The one command
 
@@ -30,7 +30,7 @@ Run it once per morning. If the exit code is 0, the job is in CUPS — do **not*
 
 Assumption: you already produce the brief; this script only formats and prints it. Feed it Markdown on stdin or via `--input`. Supported: `#`/`##` headings, `-`/`*` bullets, numbered lists, `>` quotes, `**bold**`/`*italic*`/`` `code` `` (markers stripped), links (rendered as `text (url)`), fenced code blocks (indented verbatim), `---` rules. Tables pass through as-is. See `examples/sample-brief.md`.
 
-Keep it under ~2 pages (roughly 120 lines at 80 columns) — CUPS paginates automatically.
+Layout is fixed in the script: Letter, 1" margins, Courier 11pt on 15pt leading, bold title and uppercase section headings, 43 lines per page. Keep the brief under ~40 rendered lines for a calm single page; longer briefs paginate automatically. Non-Latin-1 characters fall back to `?` (built-in Courier font), so stick to plain text, `•`, dashes and curly quotes.
 
 ## Matt's printer
 
@@ -59,36 +59,37 @@ Copy `.env.example` to `.env` next to the script (or export them). `.env` is git
 |---|---|---|---|
 | `PRINTER_NAME` | for real prints | `Brother_HL_L2370DW_series` | CUPS queue name from `lpstat -p` |
 | `CUPS_SERVER` | no | `matts-mac.local` | `host[:port]` of a remote CUPS server; `lp` honors it natively |
-| `LP_OPTIONS` | no | `-o media=Letter -o sides=two-sided-long-edge` | extra `lp` flags; use `sides=one-sided` if Matt prefers single-sided |
-| `BRIEF_OUT_DIR` | no | `out` | where rendered text is written (default `out/`) |
+| `LP_OPTIONS` | no | `-o sides=two-sided-long-edge` | extra `lp` flags, appended after the built-in `-o media=Letter` (so `-o media=A4` overrides it); use `sides=one-sided` if Matt prefers single-sided |
+| `BRIEF_OUT_DIR` | no | `out` | where the rendered PDF and text are written (default `out/`) |
 
-`--printer NAME` overrides `PRINTER_NAME`; `--env-file PATH` picks a different dotenv.
+`--printer NAME` overrides `PRINTER_NAME`; `--out PATH` sets the PDF path (a `.txt` with the same stem is written next to it); `--env-file PATH` picks a different dotenv.
 
 ## Failure behavior
 
 | Situation | What happens | Exit |
 |---|---|---|
 | Content empty / whitespace only | Nothing is rendered or printed; stderr says so | 2 |
-| `PRINTER_NAME` unset (and no `--printer`) | Text is rendered to `out/`, nothing printed | 3 |
+| `PRINTER_NAME` unset (and no `--printer`) | PDF/text are rendered to `out/`, nothing printed | 3 |
 | Queue name not known to CUPS (`lpstat -p` fails) | Nothing submitted; stderr shows the `lpadmin` hint | 3 |
 | `lp` missing, errors, or hangs >30s | Nothing (or partially) submitted; stderr has `lp`'s message | 4 |
 | Printer **offline / out of paper** but queue exists | `lp` succeeds and CUPS holds the job; it prints when the printer comes back | 0 |
 
 That last row matters: a 0 exit means "queued", not "paper is out of the printer". Don't re-run on a 0 or Matt gets duplicates. To see what's pending: `lpstat -o`; to cancel: `cancel -a "$PRINTER_NAME"`.
 
-The rendered text is always written to `out/brief-YYYY-MM-DD.txt` (even on real prints), so you can attach or re-send it if something went wrong.
+The rendered PDF and text are always written to `out/brief-YYYY-MM-DD.{pdf,txt}` (even on real prints), so you can attach or re-send them if something went wrong.
 
 ## Dry run (no paper)
 
 ```sh
 bun print_brief.ts --dry-run --input examples/sample-brief.md   # or: bun run dry-run
-cat out/brief-$(date +%F).txt
+open out/brief-$(date +%F).pdf      # exactly the file lp would send
+cat  out/brief-$(date +%F).txt      # quick look without a PDF viewer
 ```
 
-`--dry-run` never calls `lp` and doesn't need `PRINTER_NAME` or CUPS installed. Use `--out /tmp/x.txt` to pick the path.
+`--dry-run` never calls `lp` and doesn't need `PRINTER_NAME` or CUPS installed. Use `--out /tmp/x.pdf` to pick the path. Matt should approve the dry-run PDF before the first real print.
 
 ## Not in scope (yet)
 
 - Fetching brief content from anywhere — you provide it.
-- PDF / rich typography. If wanted later, swap the renderer for `pandoc -o brief.pdf` behind the same CLI.
+- Proportional fonts / rich typography. The hand-written PDF is deliberately Courier-only; swap `toPdf` for `pandoc` or a PDF library if that changes.
 - A daemon or cloud print relay. Only needed if no LAN host can run the command.
