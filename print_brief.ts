@@ -33,13 +33,26 @@ const PAGE = { width: 612, height: 792, margin: 40 };
 const HEAD = { size: 9, tracking: 2.2, gray: 0.35 };
 const LABEL = { size: 7, tracking: 1.4, gray: 0.45 };
 const BODY = { size: 10, leading: 14 };
-// Bento grid: 2×2 cards (Events | Think, Affirmations | Physical health), then journaling
-// takes whatever height is left. Rows size to content within [min, max].
+// Bento grid: 2×2 cards then journaling takes whatever height is left. Cards map to
+// sections by position; each has a presentation kind. Rows size to content within
+// [min, max]; `split` is the left card's share of the row width.
 const GRID = { gutter: 14, pad: 14, radius: 8, border: 0.5, borderGray: 0.6, headerGap: 24, labelGap: 18 };
-const ROW = { min: 108, max: 168 };
-// Notebook-style ruling inside the journaling card: light, even, with air under the label.
+type Kind = "timeline" | "text" | "ruled" | "checklist";
+const CARDS: Array<{ label: string; kind: Kind }> = [
+  { label: "Events", kind: "timeline" },
+  { label: "Interesting things to think about", kind: "text" },
+  { label: "Affirmations", kind: "ruled" },
+  { label: "Physical health", kind: "checklist" },
+];
+const ROWS = [
+  { min: 150, max: 190, split: 0.5 },
+  { min: 176, max: 216, split: 0.58 },
+];
+// Notebook-style ruling (journaling, affirmations): light, even, with air under the label.
 const RULING = { gap: 22, gray: 0.86, width: 0.35, topMargin: 30 };
-const DEFAULT_SECTIONS = ["Events", "Interesting things to think about", "Affirmations", "Physical health"];
+// Timeline (events): gray time column, hairline spine with dots, text to the right.
+const TIMELINE = { timeWidth: 30, timeSize: 9, timeGray: 0.45, spineGap: 10, spineGray: 0.75, dotRadius: 1.8, dotGray: 0.3 };
+const CHECKBOX = { size: 8, radius: 1.5, gray: 0.45, gap: 14 };
 const JOURNAL_HEADING = "Journaling / Observations / Thoughts";
 const TEXT_WIDTH = 72; // wrap width for the .txt companion file
 
@@ -115,7 +128,7 @@ export function renderMarkdown(md: string): Brief {
   const add = (prefix: string, text: string) => {
     if (!text) return;
     if (!current) {
-      current = { label: DEFAULT_SECTIONS[0], items: [] };
+      current = { label: CARDS[0].label, items: [] };
       sections.push(current);
     }
     current.items.push({ prefix, text });
@@ -148,7 +161,7 @@ export function renderMarkdown(md: string): Brief {
 
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) continue;
 
-    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
+    const bullet = /^\s*[-*+]\s+(?:\[[ xX]\]\s+)?(.*)$/.exec(line);
     if (bullet) {
       add("• ", inline(bullet[1]));
       continue;
@@ -166,9 +179,9 @@ export function renderMarkdown(md: string): Brief {
     if (line.trim()) add("", inline(line));
   }
 
-  const slots = DEFAULT_SECTIONS.length;
+  const slots = CARDS.length;
   const filled = sections.filter((s) => s.items.length || sections.indexOf(s) < slots);
-  while (filled.length < slots) filled.push({ label: DEFAULT_SECTIONS[filled.length], items: [] });
+  while (filled.length < slots) filled.push({ label: CARDS[filled.length].label, items: [] });
   return { title: title.toUpperCase(), date: longDate().toUpperCase(), sections: filled, journal };
 }
 
@@ -199,11 +212,16 @@ function wrapItem(item: Item, maxWidth: number, measure: (s: string) => number):
 export function toText(brief: Brief): string {
   if (isEmpty(brief)) return "";
   const out = [`${brief.title}  ·  ${brief.date}`, ""];
-  for (const s of brief.sections) {
+  brief.sections.forEach((s, i) => {
     out.push(s.label.toUpperCase());
-    for (const item of s.items) out.push(...wrapItem(item, TEXT_WIDTH, (t) => t.length));
+    const kind = CARDS[i]?.kind;
+    for (const item of s.items) {
+      const prefix = kind === "checklist" ? "[ ] " : item.prefix;
+      out.push(...wrapItem({ prefix, text: item.text }, TEXT_WIDTH, (t) => t.length));
+    }
+    if (kind === "ruled" && !s.items.length) out.push("_".repeat(TEXT_WIDTH));
     out.push("");
-  }
+  });
   out.push(brief.journal.toUpperCase(), "", "_".repeat(TEXT_WIDTH));
   return out.join("\n") + "\n";
 }
@@ -277,26 +295,102 @@ function roundedRect(x: number, y: number, w: number, h: number, r: number): str
   ].join(" ");
 }
 
-/** Lines a section needs at `width`, plus the box height that would hold them all. */
-function layoutSection(section: Section, width: number): { lines: string[]; height: number } {
-  const inner = width - 2 * GRID.pad;
-  const lines = section.items.flatMap((item) => wrapItem(item, inner, (t) => helveticaWidth(t, BODY.size)));
-  const height = 2 * GRID.pad + LABEL.size + GRID.labelGap + Math.max(0, lines.length - 1) * BODY.leading + (lines.length ? BODY.size : 0);
-  return { lines, height };
+/** One visual row of a card: optional time (timeline), optional checkbox, wrapped text lines. */
+type Row = { time?: string; box?: boolean; lines: string[] };
+
+const measure = (t: string) => helveticaWidth(t, BODY.size);
+
+/** Text x-offset inside the card body for each kind (timeline/checklist reserve a gutter). */
+function textIndent(kind: Kind): number {
+  if (kind === "timeline") return TIMELINE.timeWidth + 2 * TIMELINE.spineGap;
+  if (kind === "checklist") return CHECKBOX.size + CHECKBOX.gap - CHECKBOX.size / 2 + 4;
+  return 0;
 }
 
-/** Draw one bento card: hairline rounded border, quiet caps label, and as many body lines as fit ("…" if clipped). */
-function drawBox(ops: string[], x: number, top: number, width: number, height: number, label: string, lines: string[]): void {
+/** Lay a section out as rows for its card kind, and the card height that would hold them all. */
+function layoutSection(section: Section, kind: Kind, width: number): { rows: Row[]; height: number } {
+  const inner = width - 2 * GRID.pad - textIndent(kind);
+  const rows: Row[] = section.items.map((item) => {
+    if (kind === "timeline") {
+      const m = /^(\d{1,2}:\d{2}\s*(?:[ap]m)?)\s*[–—-]?\s*(.*)$/i.exec(item.text);
+      const text = m ? m[2] : item.text;
+      return { time: m?.[1].replace(/\s+/g, ""), lines: wrapItem({ prefix: "", text }, inner, measure) };
+    }
+    if (kind === "checklist") return { box: true, lines: wrapItem({ prefix: "", text: item.text }, inner, measure) };
+    return { lines: wrapItem(item, inner, measure) };
+  });
+  const n = rows.reduce((sum, r) => sum + r.lines.length, 0);
+  const height = 2 * GRID.pad + LABEL.size + GRID.labelGap + Math.max(0, n - 1) * BODY.leading + (n ? BODY.size : 0);
+  return { rows, height };
+}
+
+/** Faint notebook rules from `fromY` down to `toY`. */
+function drawRuling(ops: string[], x1: number, x2: number, fromY: number, toY: number): void {
+  ops.push(`${RULING.gray} G ${RULING.width} w`);
+  for (let ry = fromY; ry >= toY; ry -= RULING.gap) {
+    ops.push(`${x1.toFixed(1)} ${ry.toFixed(1)} m ${x2.toFixed(1)} ${ry.toFixed(1)} l S`);
+  }
+}
+
+/** Draw one bento card: hairline rounded border, quiet caps label, then the body for its kind. */
+function drawCard(ops: string[], x: number, top: number, width: number, height: number, label: string, kind: Kind, rows: Row[]): void {
   ops.push(`${GRID.borderGray} G ${GRID.border} w ${roundedRect(x, top - height, width, height, GRID.radius)}`);
   const labelY = top - GRID.pad - LABEL.size;
   ops.push(textOp(label.toUpperCase(), x + GRID.pad, labelY, F_SANS_BOLD, LABEL.size, LABEL.tracking, LABEL.gray));
-  let y = labelY - GRID.labelGap;
+  const x0 = x + GRID.pad;
+  const textX = x0 + textIndent(kind);
   const bottom = top - height + GRID.pad;
+  let y = labelY - GRID.labelGap;
+
+  // Clip to the lines that fit; the last visible line becomes "…" when anything is cut.
   const fit = Math.max(0, Math.floor((y - bottom) / BODY.leading) + 1);
-  const shown = lines.length > fit ? [...lines.slice(0, Math.max(0, fit - 1)), "…"] : lines;
-  for (const line of shown) {
-    ops.push(textOp(line, x + GRID.pad, y, F_SANS, BODY.size));
-    y -= BODY.leading;
+  const total = rows.reduce((n, r) => n + r.lines.length, 0);
+  let budget = total > fit ? fit - 1 : total;
+  const shown: Row[] = [];
+  for (const r of rows) {
+    if (budget <= 0) break;
+    shown.push({ ...r, lines: r.lines.slice(0, budget) });
+    budget -= r.lines.length;
+  }
+  if (total > fit) shown.push({ lines: ["…"] });
+
+  const firstY = y;
+  for (const r of shown) {
+    if (r.time) {
+      const tx = x0 + TIMELINE.timeWidth - helveticaWidth(r.time, TIMELINE.timeSize);
+      ops.push(textOp(r.time, tx, y, F_SANS, TIMELINE.timeSize, 0, TIMELINE.timeGray));
+    }
+    if (kind === "timeline" && r.time !== undefined) {
+      const cx = x0 + TIMELINE.timeWidth + TIMELINE.spineGap;
+      const cy = y + BODY.size * 0.35;
+      const rr = TIMELINE.dotRadius;
+      const k = 0.5523 * rr;
+      ops.push(
+        `${TIMELINE.dotGray} g ${cx + rr} ${cy} m ${cx + rr} ${cy + k} ${cx + k} ${cy + rr} ${cx} ${cy + rr} c ` +
+          `${cx - k} ${cy + rr} ${cx - rr} ${cy + k} ${cx - rr} ${cy} c ${cx - rr} ${cy - k} ${cx - k} ${cy - rr} ${cx} ${cy - rr} c ` +
+          `${cx + k} ${cy - rr} ${cx + rr} ${cy - k} ${cx + rr} ${cy} c f`,
+      );
+    }
+    if (r.box) {
+      const s = CHECKBOX.size;
+      ops.push(`${CHECKBOX.gray} G 0.6 w ${roundedRect(x0, y - 1, s, s, CHECKBOX.radius)}`);
+    }
+    for (const line of r.lines) {
+      ops.push(textOp(line, textX, y, F_SANS, BODY.size));
+      y -= BODY.leading;
+    }
+  }
+
+  if (kind === "timeline" && shown.some((r) => r.time)) {
+    // Spine: a hairline joining the dots, drawn behind them is unnecessary since dots are filled.
+    const sx = x0 + TIMELINE.timeWidth + TIMELINE.spineGap;
+    const lastY = y + BODY.leading + BODY.size * 0.35;
+    ops.push(`${TIMELINE.spineGray} G 0.5 w ${sx} ${(firstY + BODY.size * 0.35).toFixed(1)} m ${sx} ${lastY.toFixed(1)} l S`);
+  }
+  if (kind === "ruled") {
+    // Handwriting room: rule from below whatever text was printed down to the padding.
+    const start = shown.length ? y - (RULING.gap - BODY.leading) : labelY - RULING.topMargin;
+    drawRuling(ops, x0, x + width - GRID.pad, start, bottom);
   }
 }
 
@@ -305,7 +399,6 @@ export function toPdf(brief: Brief): Buffer {
   const right = PAGE.width - PAGE.margin;
   const bottom = PAGE.margin;
   const fullWidth = right - left;
-  const colWidth = (fullWidth - GRID.gutter) / 2;
   const ops: string[] = [];
 
   // Header: title left, date right — small bold letterspaced mono caps.
@@ -316,24 +409,21 @@ export function toPdf(brief: Brief): Buffer {
   y -= GRID.headerGap;
 
   // 2×2 cards; each row shares one height sized to its taller card.
-  for (let i = 0; i + 1 < brief.sections.length; i += 2) {
-    const [l, r] = [brief.sections[i], brief.sections[i + 1]];
-    const ll = layoutSection(l, colWidth);
-    const lr = layoutSection(r, colWidth);
-    const rowHeight = Math.min(ROW.max, Math.max(ROW.min, ll.height, lr.height));
-    drawBox(ops, left, y, colWidth, rowHeight, l.label, ll.lines);
-    drawBox(ops, left + colWidth + GRID.gutter, y, colWidth, rowHeight, r.label, lr.lines);
+  ROWS.forEach((row, i) => {
+    const [l, r] = [brief.sections[2 * i], brief.sections[2 * i + 1]];
+    const [kl, kr] = [CARDS[2 * i].kind, CARDS[2 * i + 1].kind];
+    const leftWidth = Math.round((fullWidth - GRID.gutter) * row.split);
+    const rightWidth = fullWidth - GRID.gutter - leftWidth;
+    const ll = layoutSection(l, kl, leftWidth);
+    const lr = layoutSection(r, kr, rightWidth);
+    const rowHeight = Math.min(row.max, Math.max(row.min, ll.height, lr.height));
+    drawCard(ops, left, y, leftWidth, rowHeight, l.label, kl, ll.rows);
+    drawCard(ops, left + leftWidth + GRID.gutter, y, rightWidth, rowHeight, r.label, kr, lr.rows);
     y -= rowHeight + GRID.gutter;
-  }
+  });
 
   // Journaling takes whatever is left, ruled like a notebook page.
-  const journalHeight = y - bottom;
-  drawBox(ops, left, y, fullWidth, journalHeight, brief.journal, []);
-  ops.push(`${RULING.gray} G ${RULING.width} w`);
-  const firstRule = y - GRID.pad - LABEL.size - RULING.topMargin;
-  for (let ry = firstRule; ry >= bottom + GRID.pad; ry -= RULING.gap) {
-    ops.push(`${left + GRID.pad} ${ry.toFixed(1)} m ${right - GRID.pad} ${ry.toFixed(1)} l S`);
-  }
+  drawCard(ops, left, y, fullWidth, y - bottom, brief.journal, "ruled", []);
 
   const objects: string[] = [];
   const addObj = (body: string) => objects.push(body) && objects.length; // 1-based object number

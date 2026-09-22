@@ -15,14 +15,11 @@
 
 ## Affirmations
 
-- I do the next small thing well.
-- Attention is the only currency I actually spend.
-- Today is enough.
-
 ## Physical health
 
-- 07:15 Easy 5k, zone 2
-- Mobility: hips and thoracic, 10 min
-- Walk after lunch; water before coffee
+- [ ] Easy 5k, zone 2
+- [ ] Mobility: hips and thoracic, 10 min
+- [ ] Walk after lunch
+- [ ] Water before coffee
 
 ## Journaling / Observations / Thoughts
