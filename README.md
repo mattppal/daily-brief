@@ -16,6 +16,7 @@ cp .env.example .env   # PRINTER_NAME=Brother_HL_L2370DW_series is pre-filled
 cat brief.md | bun print_brief.ts
 ```
 
+- [docs/architecture.md](docs/architecture.md) — the multi-bot shape (source bots → orchestrator → printer bot), section-to-source map, print path options, routine, and the Markdown contract.
 - [docs/HANDOFF.md](docs/HANDOFF.md) — routine schedule, env vars, printer setup, failure behavior, dry-run steps for Eng.
 - `examples/sample-brief.md` — the Markdown subset the renderer understands.
 - `bun install && bun run typecheck` — optional `tsc --noEmit` sanity check (the only dev deps).
