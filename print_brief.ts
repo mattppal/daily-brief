@@ -26,9 +26,10 @@ const EXIT_LP_FAILED = 4;
 
 const LP_TIMEOUT_MS = 30_000;
 
-// Page: US Letter portrait, 1" margins, Helvetica throughout. Stationery feel: quiet
-// tracked-caps header and card labels in gray, black body copy, hairline rounded cards.
-const PAGE = { width: 612, height: 792, margin: 72 };
+// Page: US Letter portrait, ~0.56" margins (well inside a laser's ~0.17" hardware margin),
+// Helvetica throughout. Stationery feel: quiet tracked-caps header and card labels in
+// gray, black body copy, hairline rounded cards.
+const PAGE = { width: 612, height: 792, margin: 40 };
 const HEAD = { size: 9, tracking: 2.2, gray: 0.35 };
 const LABEL = { size: 7, tracking: 1.4, gray: 0.45 };
 const BODY = { size: 10, leading: 14 };
