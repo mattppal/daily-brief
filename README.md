@@ -2,9 +2,9 @@
 
 Grok Bot morning brief → physical printer.
 
-A Grok Bot teammate ("Eng") assembles Matt's brief as Markdown each morning and pipes it into `print_brief.ts`, which renders it to a minimalist uppercase-mono PDF (Letter, 1" margins, Courier) and sends it to a CUPS/IPP printer with `lp`. One TypeScript file, `node:` built-ins only, zero runtime dependencies — the PDF is written by hand so the same file prints identically on any host. Runs with [Bun](https://bun.sh) (or `node --experimental-strip-types` on Node 22.6+).
+A Grok Bot teammate ("Eng") assembles Matt's brief as Markdown each morning and pipes it into `print_brief.ts`, which renders it to a one-page "bento worksheet" PDF (Letter portrait, 1" margins) and sends it to a CUPS/IPP printer with `lp`. One TypeScript file, `node:` built-ins only, zero runtime dependencies — the PDF is written by hand so the same file prints identically on any host. Runs with [Bun](https://bun.sh) (or `node --experimental-strip-types` on Node 22.6+).
 
-The page has a fixed shape — small title/date header, then four sections: **Events**, **Interesting things to think about**, **Affirmations**, and **Journaling / Observations / Thoughts**, which is ruled to the bottom of the page for morning-pages handwriting. See `examples/sample-brief.md` for the Markdown Eng should emit.
+The page has a fixed shape: a letterspaced mono-caps header (title left, date right), then thin-bordered boxes — **Events** | **Interesting things to think about** side by side, full-width **Affirmations**, and a large **Journaling / Observations / Thoughts** box ruled for morning-pages handwriting. Labels are Courier-Bold caps; body copy is Helvetica (built-in PDF font, so no font files are shipped). See `examples/sample-brief.md` for the Markdown Eng should emit.
 
 ```sh
 # dry run: render to out/brief-YYYY-MM-DD.pdf (+ .txt), print nothing

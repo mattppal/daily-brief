@@ -1,6 +1,6 @@
 # Handoff for Eng (Grok Bot morning routine)
 
-You own the morning wake/routine. This repo owns two things: turning brief Markdown into a minimalist uppercase-mono PDF with a fixed section structure, and getting it onto Matt's printer via CUPS. Everything runs from one command.
+You own the morning wake/routine. This repo owns two things: turning brief Markdown into a one-page bento-worksheet PDF with a fixed section structure, and getting it onto Matt's printer via CUPS. Everything runs from one command.
 
 ## The one command
 
@@ -46,11 +46,11 @@ Assumption: you already produce the brief; this script only formats and prints i
 ## Journaling / Observations / Thoughts
 ```
 
-The four `##` sections are the page's fixed structure — keep the names and order. The last one stays empty: the script rules the rest of the page with faint lines for Matt's morning-pages handwriting (and appends the section itself if you forget it). If the first three sections run long, journaling moves to a fresh page so there is always at least ~3" of writing room.
+The four `##` sections are the page's fixed structure — keep the order. Sections map to boxes by position: the first two share the top row, the third is the full-width middle row, and the journaling heading (anything starting with "journal") names the big ruled box at the bottom. Missing sections are still drawn with their default labels; anything written under the journaling heading is ignored — that box is handwriting room.
 
-Supported Markdown: `#` title (defaults to "Daily Brief"; today's date is added automatically), `##` headings, `-`/`*` bullets, numbered lists, `>` quotes, `**bold**`/`*italic*`/`` `code` `` (markers stripped), links (rendered as `text (url)`), fenced code blocks. `---` rules are dropped. Everything is set in UPPERCASE Courier, so avoid URLs and case-sensitive strings.
+Supported Markdown: `#` title (defaults to "Daily Brief"; today's date is added automatically), `##` headings, `-`/`*` bullets, numbered lists, `>` quotes, `**bold**`/`*italic*`/`` `code` `` (markers stripped), links (rendered as `text (url)`), fenced code blocks. `---` rules are dropped.
 
-Layout is fixed in the script: Letter, 1" margins, 8pt bold letterspaced section heads, 10pt body on 15pt leading, no footer. Aim for ~10–12 items across the first three sections to keep everything on one page. Non-Latin-1 characters fall back to `?` (built-in Courier font), so stick to plain text, `•`, dashes and curly quotes.
+Layout is fixed in the script: Letter portrait, 1" margins, thin black box borders, 7–8pt Courier-Bold letterspaced caps for the header and box labels, 10pt Helvetica body on 14pt leading, faint 24pt ruling in the journaling box, no footer. It is always exactly one page: the top boxes hold about 8 lines each and affirmations about 5 before the text is clipped with "…", and journaling takes whatever height is left (never less than ~3"). Aim for 3–5 short items per section. Fonts are the PDF built-ins (no font files shipped); non-Latin-1 characters fall back to `?`, so stick to plain text, `•`, dashes and curly quotes.
 
 ## Matt's printer
 
@@ -111,5 +111,5 @@ cat  out/brief-$(date +%F).txt      # quick look without a PDF viewer
 ## Not in scope (yet)
 
 - Fetching brief content from anywhere — you provide it.
-- Proportional fonts / rich typography / mixed case. The hand-written PDF is deliberately uppercase Courier; swap `toPdf` for `pandoc` or a PDF library if that changes.
+- Inter (or any embedded font). Body copy uses built-in Helvetica so the repo ships no binaries. To move to Inter: subset `Inter-Regular.ttf` to WinAnsi with `pyftsubset` (fonttools), embed it as a `FontFile2` stream with a `FontDescriptor`, and read advance widths from its `hmtx` table for wrapping — roughly 80 lines plus the font file.
 - A daemon or cloud print relay. Only needed if no LAN host can run the command.
