@@ -43,14 +43,17 @@ Assumption: you already produce the brief; this script only formats and prints i
 ## Affirmations
 - …
 
+## Physical health
+- …
+
 ## Journaling / Observations / Thoughts
 ```
 
-The four `##` sections are the page's fixed structure — keep the order. Sections map to boxes by position: the first two share the top row, the third is the full-width middle row, and the journaling heading (anything starting with "journal") names the big ruled box at the bottom. Missing sections are still drawn with their default labels; anything written under the journaling heading is ignored — that box is handwriting room.
+The five `##` sections are the page's fixed structure — keep the order. Sections map to cards by position in a 2×2 grid: row one is **Events | Interesting things to think about**, row two is **Affirmations | Physical health** (workout / movement / recovery), and the journaling heading (anything starting with "journal") names the large ruled card that fills the rest of the page. Missing sections are still drawn with their default labels; anything written under the journaling heading is ignored — that card is handwriting room.
 
 Supported Markdown: `#` title (defaults to "Daily Brief"; today's date is added automatically), `##` headings, `-`/`*` bullets, numbered lists, `>` quotes, `**bold**`/`*italic*`/`` `code` `` (markers stripped), links (rendered as `text (url)`), fenced code blocks. `---` rules are dropped.
 
-Layout is fixed in the script: Letter portrait, 1" margins, thin black box borders, 7–8pt Courier-Bold letterspaced caps for the header and box labels, 10pt Helvetica body on 14pt leading, faint 24pt ruling in the journaling box, no footer. It is always exactly one page: the top boxes hold about 8 lines each and affirmations about 5 before the text is clipped with "…", and journaling takes whatever height is left (never less than ~3"). Aim for 3–5 short items per section. Fonts are the PDF built-ins (no font files shipped); non-Latin-1 characters fall back to `?`, so stick to plain text, `•`, dashes and curly quotes.
+Layout is fixed in the script: Letter portrait, 1" margins, cards with 8pt rounded corners and 0.5pt gray hairline borders, 14pt padding and gutters, no footer. Typography is all Helvetica (the PDF built-in, so the repo ships no font files): header in 9pt gray letterspaced caps, card labels in 7pt bold gray letterspaced caps, body in black 10pt on 14pt leading. The journaling card is ruled every 22pt with very light lines and a little air under the label, like a good notebook. It is always exactly one page: each card holds about 7 lines before the text is clipped with "…", rows size to their taller card, and journaling takes whatever height is left (never less than ~3"; ~4" with the sample). Aim for 3–4 short items per card. Non-Latin-1 characters fall back to `?`, so stick to plain text, `•`, dashes and curly quotes.
 
 ## Matt's printer
 
@@ -111,5 +114,5 @@ cat  out/brief-$(date +%F).txt      # quick look without a PDF viewer
 ## Not in scope (yet)
 
 - Fetching brief content from anywhere — you provide it.
-- Inter (or any embedded font). Body copy uses built-in Helvetica so the repo ships no binaries. To move to Inter: subset `Inter-Regular.ttf` to WinAnsi with `pyftsubset` (fonttools), embed it as a `FontFile2` stream with a `FontDescriptor`, and read advance widths from its `hmtx` table for wrapping — roughly 80 lines plus the font file.
+- Inter (or any embedded font). Everything uses built-in Helvetica so the repo ships no binaries; on a mono laser the difference from Inter is slight. To move to Inter: subset `Inter-Regular.ttf`/`Inter-SemiBold.ttf` to WinAnsi with `pyftsubset` (fonttools), embed each as a `FontFile2` stream with a `FontDescriptor`, and read advance widths from `hmtx` for wrapping — roughly 80 lines plus the font files.
 - A daemon or cloud print relay. Only needed if no LAN host can run the command.
