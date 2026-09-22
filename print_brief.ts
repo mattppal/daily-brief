@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Render a Markdown daily brief to a minimalist one-column PDF and send it to CUPS.
+ * Render a Markdown daily brief to a one-page "bento worksheet" PDF and send it to CUPS.
  *
  * Usage:
  *   cat brief.md | bun print_brief.ts              # print via `lp -d $PRINTER_NAME`
@@ -11,8 +11,9 @@
  *   3 printer queue not found     4 `lp` failed or timed out
  *
  * Uses only `node:` built-ins so it also runs under `node --experimental-strip-types`.
- * The PDF is written by hand with the built-in Courier fonts, so the file sent to `lp`
- * prints identically on any host and can be previewed before anything hits paper.
+ * The PDF is written by hand with the built-in Courier-Bold (labels) and Helvetica (body)
+ * fonts, so the file sent to `lp` prints identically on any host and can be previewed
+ * before anything hits paper.
  */
 
 import { spawnSync } from "node:child_process";
@@ -26,15 +27,21 @@ const EXIT_LP_FAILED = 4;
 
 const LP_TIMEOUT_MS = 30_000;
 
-// Page layout: US Letter, 1" margins, uppercase Courier throughout.
+// Page: US Letter portrait, 1" margins. Header is letterspaced Courier-Bold caps; box
+// labels reuse that style one point smaller; body copy is Helvetica.
 const PAGE = { width: 612, height: 792, margin: 72 };
-const BODY = { size: 10, leading: 15 };
-const HEAD = { size: 8, tracking: 1.5, spaceAbove: 18 }; // section heads: small, bold, letterspaced
-// Courier glyphs are 0.6em wide; keep lines comfortably inside the text block.
-const LINE_WIDTH = Math.floor((PAGE.width - 2 * PAGE.margin) / (BODY.size * 0.6)) - 4; // 74
-// Morning-pages ruling for the journaling section.
-const RULING = { gap: 24, gray: 0.8, width: 0.4, minSpace: 240 };
+const HEAD = { size: 8, tracking: 1.5 };
+const LABEL = { size: 7, tracking: 1.5 };
+const BODY = { size: 10, leading: 14 };
+// Bento grid: two boxes on top, full-width affirmations, journaling takes the rest.
+const GRID = { gutter: 12, pad: 12, border: 0.6, headerGap: 22, labelGap: 18 };
+const TOP_ROW = { min: 132, max: 240 };
+const MIDDLE_ROW = { min: 62, max: 120 };
+// Morning-pages ruling inside the journaling box.
+const RULING = { gap: 24, gray: 0.8, width: 0.4 };
+const DEFAULT_SECTIONS = ["Events", "Interesting things to think about", "Affirmations"];
 const JOURNAL_HEADING = "Journaling / Observations / Thoughts";
+const TEXT_WIDTH = 72; // wrap width for the .txt companion file
 
 // Paper default for `lp`. LP_OPTIONS is appended after this, so Matt's values win
 // (e.g. `-o sides=one-sided`). Margins/fonts live in the PDF, not in lp options.
@@ -66,13 +73,12 @@ function loadDotenv(path: string): void {
   }
 }
 
-// ---------------------------------------------------------------- Markdown → lines
+// ---------------------------------------------------------------- Markdown → sections
 
-// "journal" marks the heading of the morning-pages section: the PDF rules the rest of the
-// page below it for handwriting.
-type Style = "heading" | "body" | "journal";
-type Line = { text: string; style: Style };
-export type Brief = { title: string; date: string; lines: Line[] };
+/** One list item or paragraph; `prefix` ("• ", "1. ", "") hangs on wrapped continuation lines. */
+type Item = { prefix: string; text: string };
+type Section = { label: string; items: Item[] };
+export type Brief = { title: string; date: string; sections: Section[]; journal: string };
 
 const INLINE_PATTERNS: Array<[RegExp, string]> = [
   [/\*\*(.+?)\*\*/g, "$1"],
@@ -86,25 +92,7 @@ const INLINE_PATTERNS: Array<[RegExp, string]> = [
 
 function inline(text: string): string {
   for (const [pattern, repl] of INLINE_PATTERNS) text = text.replace(pattern, repl);
-  return text;
-}
-
-/** Word-wrap `text` to LINE_WIDTH; `first` prefixes line 1, `rest` the continuation lines. */
-function wrap(text: string, first = "", rest = " ".repeat(first.length)): string[] {
-  if (first.length + text.length <= LINE_WIDTH) return [first + text];
-  const lines: string[] = [];
-  let cur = first;
-  let prefixLen = first.length;
-  for (const word of text.split(/\s+/).filter(Boolean)) {
-    if (cur.length > prefixLen && cur.length + 1 + word.length > LINE_WIDTH) {
-      lines.push(cur);
-      cur = rest;
-      prefixLen = rest.length;
-    }
-    cur += (cur.length > prefixLen ? " " : "") + word;
-  }
-  lines.push(cur);
-  return lines;
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function longDate(): string {
@@ -112,22 +100,25 @@ function longDate(): string {
 }
 
 /**
- * Convert a Markdown subset to an uppercase, styled brief. The first `#` is the page title
- * (default "Daily Brief"); `##` are section headings; lists keep `•` / `1.`; emphasis, code,
- * link and rule syntax is stripped; prose is word-wrapped. A heading starting with
- * "journal" (appended if missing) becomes the ruled morning-pages section.
+ * Parse a Markdown subset into the fixed bento structure. The first `#` is the title
+ * (default "Daily Brief"); each `##` opens a section; a heading starting with "journal"
+ * names the ruled morning-pages box. Sections map to boxes in order: the first two share
+ * the top row, the third is the full-width middle row; missing ones get default labels.
  */
 export function renderMarkdown(md: string): Brief {
-  const out: Line[] = [];
   let title = "Daily Brief";
-  let hasJournal = false;
+  let journal = JOURNAL_HEADING;
+  const sections: Section[] = [];
+  let current: Section | null = null;
   let inCode = false;
-  const last = () => out[out.length - 1]?.text;
-  const push = (texts: string[], style: Style = "body") => {
-    for (const text of texts) out.push({ text: text.toUpperCase(), style });
-  };
-  const blankBefore = () => {
-    if (out.length && last() !== "") push([""]);
+
+  const add = (prefix: string, text: string) => {
+    if (!text) return;
+    if (!current) {
+      current = { label: DEFAULT_SECTIONS[0], items: [] };
+      sections.push(current);
+    }
+    current.items.push({ prefix, text });
   };
 
   for (const raw of md.split(/\r?\n/)) {
@@ -137,78 +128,89 @@ export function renderMarkdown(md: string): Brief {
       continue;
     }
     if (inCode) {
-      push(["    " + line]);
+      add("", line.trim());
       continue;
     }
 
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
-      const text = inline(heading[2]).trim();
-      if (heading[1].length === 1) {
-        title = text;
-        continue;
-      }
-      blankBefore();
-      if (/^journal/i.test(text)) {
-        hasJournal = true;
-        push([text], "journal");
+      const text = inline(heading[2]);
+      if (heading[1].length === 1) title = text;
+      else if (/^journal/i.test(text)) {
+        journal = text;
+        current = null; // anything under the journaling heading is ignored: it is writing room
       } else {
-        push([text], "heading");
+        current = { label: text, items: [] };
+        sections.push(current);
       }
       continue;
     }
 
-    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
-      blankBefore();
-      continue;
-    }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) continue;
 
-    const bullet = /^(\s*)[-*+]\s+(.*)$/.exec(line);
+    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
     if (bullet) {
-      const indent = " ".repeat(Math.floor(bullet[1].length / 2) * 2);
-      push(wrap(inline(bullet[2]), `${indent}• `));
+      add("• ", inline(bullet[1]));
       continue;
     }
-
-    const ordered = /^(\s*)(\d+)[.)]\s+(.*)$/.exec(line);
+    const ordered = /^\s*(\d+)[.)]\s+(.*)$/.exec(line);
     if (ordered) {
-      const indent = " ".repeat(Math.floor(ordered[1].length / 2) * 2);
-      push(wrap(inline(ordered[3]), `${indent}${ordered[2]}. `));
+      add(`${ordered[1]}. `, inline(ordered[2]));
       continue;
     }
-
     const quote = /^\s*>\s?(.*)$/.exec(line);
     if (quote) {
-      push(wrap(inline(quote[1]), "    "));
+      add("", inline(quote[1]));
       continue;
     }
-
-    push(line.trim() ? wrap(inline(line)) : [""]);
+    if (line.trim()) add("", inline(line));
   }
 
-  if (out.some((l) => l.text.trim()) && !hasJournal) {
-    blankBefore();
-    push([JOURNAL_HEADING], "journal");
-  }
+  const filled = sections.filter((s) => s.items.length || sections.indexOf(s) < 3);
+  while (filled.length < 3) filled.push({ label: DEFAULT_SECTIONS[filled.length], items: [] });
+  return { title: title.toUpperCase(), date: longDate().toUpperCase(), sections: filled, journal };
+}
 
-  // Trim leading/trailing blanks, collapse runs of blank lines, and drop blanks right after
-  // a heading (the PDF already spaces headings; the text file reads fine without them).
-  while (out.length && out[0].text === "") out.shift();
-  while (out.length && out[out.length - 1].text === "") out.pop();
-  const lines = out.filter((l, i) => !(l.text === "" && i > 0 && (out[i - 1].text === "" || out[i - 1].style !== "body")));
-  return { title: title.toUpperCase(), date: longDate().toUpperCase(), lines };
+export function isEmpty(brief: Brief): boolean {
+  return !brief.sections.some((s) => s.items.length);
+}
+
+/** Word-wrap using `measure` for widths; `prefix` hangs on continuation lines. */
+function wrapItem(item: Item, maxWidth: number, measure: (s: string) => number): string[] {
+  const indent = " ".repeat(item.prefix.length);
+  const lines: string[] = [];
+  let cur = item.prefix;
+  let bare = true;
+  for (const word of item.text.split(" ")) {
+    const candidate = bare ? cur + word : `${cur} ${word}`;
+    if (!bare && measure(candidate) > maxWidth) {
+      lines.push(cur);
+      cur = indent + word;
+    } else {
+      cur = candidate;
+    }
+    bare = false;
+  }
+  lines.push(cur);
+  return lines;
 }
 
 export function toText(brief: Brief): string {
-  if (!brief.lines.some((l) => l.text.trim())) return "";
-  const body = brief.lines.map((l) => (l.style === "journal" ? `${l.text}\n\n${"_".repeat(LINE_WIDTH)}` : l.text));
-  return [`${brief.title}  ·  ${brief.date}`, "", ...body].join("\n") + "\n";
+  if (isEmpty(brief)) return "";
+  const out = [`${brief.title}  ·  ${brief.date}`, ""];
+  for (const s of brief.sections) {
+    out.push(s.label.toUpperCase());
+    for (const item of s.items) out.push(...wrapItem(item, TEXT_WIDTH, (t) => t.length));
+    out.push("");
+  }
+  out.push(brief.journal.toUpperCase(), "", "_".repeat(TEXT_WIDTH));
+  return out.join("\n") + "\n";
 }
 
-// ---------------------------------------------------------------- lines → PDF
+// ---------------------------------------------------------------- sections → PDF
 
-// Built-in Courier uses WinAnsiEncoding; map the typographic characters a brief is likely
-// to contain, pass Latin-1 through, and fall back to "?" for anything else.
+// Built-in fonts use WinAnsiEncoding; map the typographic characters a brief is likely to
+// contain, pass Latin-1 through, and fall back to "?" for anything else.
 const WINANSI: Record<string, number> = {
   "\u2022": 0x95, "\u2013": 0x96, "\u2014": 0x97, "\u2018": 0x91, "\u2019": 0x92,
   "\u201c": 0x93, "\u201d": 0x94, "\u2026": 0x85, "\u20ac": 0x80, "\u2122": 0x99,
@@ -225,88 +227,117 @@ function pdfString(text: string): string {
   return `(${s})`;
 }
 
-/** Width of `text` set in Courier at `size` with `tracking` points between glyphs. */
-function textWidth(text: string, size: number, tracking = 0): number {
+// Helvetica advance widths (AFM, per 1000 em) for ASCII 0x20–0x7E, plus the few
+// typographic extras above. Anything else is assumed average width.
+const HELVETICA_ASCII = [
+  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278,
+  556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556,
+  1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
+  667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,
+  333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
+  556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+];
+const HELVETICA_EXTRA: Record<string, number> = {
+  "\u2022": 350, "\u2013": 556, "\u2014": 1000, "\u2018": 222, "\u2019": 222,
+  "\u201c": 333, "\u201d": 333, "\u2026": 1000, "\u00b0": 400, "\u00a0": 278,
+};
+
+function helveticaWidth(text: string, size: number): number {
+  let units = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)!;
+    units += cp >= 0x20 && cp <= 0x7e ? HELVETICA_ASCII[cp - 0x20] : HELVETICA_EXTRA[ch] ?? 556;
+  }
+  return (units / 1000) * size;
+}
+
+function monoWidth(text: string, size: number, tracking: number): number {
   const n = [...text].length;
   return n * size * 0.6 + Math.max(0, n - 1) * tracking;
 }
 
-function textOp(text: string, x: number, y: number, font: "/F1" | "/F2", size: number, tracking = 0): string {
+const F_MONO = "/F1";
+const F_SANS = "/F2";
+
+function textOp(text: string, x: number, y: number, font: string, size: number, tracking = 0): string {
   return `BT ${font} ${size} Tf ${tracking} Tc 1 0 0 1 ${x.toFixed(1)} ${y.toFixed(1)} Tm ${pdfString(text)} Tj ET`;
+}
+
+/** Lines a section needs at `width`, plus the box height that would hold them all. */
+function layoutSection(section: Section, width: number): { lines: string[]; height: number } {
+  const inner = width - 2 * GRID.pad;
+  const lines = section.items.flatMap((item) => wrapItem(item, inner, (t) => helveticaWidth(t, BODY.size)));
+  const height = 2 * GRID.pad + LABEL.size + GRID.labelGap + Math.max(0, lines.length - 1) * BODY.leading + (lines.length ? BODY.size : 0);
+  return { lines, height };
+}
+
+/** Draw one bento box: border, mono caps label, and as many body lines as fit ("…" if clipped). */
+function drawBox(ops: string[], x: number, top: number, width: number, height: number, label: string, lines: string[]): void {
+  ops.push(`0 G ${GRID.border} w ${x} ${(top - height).toFixed(1)} ${width} ${height} re S`);
+  const labelY = top - GRID.pad - LABEL.size;
+  ops.push(textOp(label.toUpperCase(), x + GRID.pad, labelY, F_MONO, LABEL.size, LABEL.tracking));
+  let y = labelY - GRID.labelGap;
+  const bottom = top - height + GRID.pad;
+  const fit = Math.max(0, Math.floor((y - bottom) / BODY.leading) + 1);
+  const shown = lines.length > fit ? [...lines.slice(0, Math.max(0, fit - 1)), "…"] : lines;
+  for (const line of shown) {
+    ops.push(textOp(line, x + GRID.pad, y, F_SANS, BODY.size));
+    y -= BODY.leading;
+  }
 }
 
 export function toPdf(brief: Brief): Buffer {
   const left = PAGE.margin;
   const right = PAGE.width - PAGE.margin;
   const bottom = PAGE.margin;
-  const pages: string[][] = [];
-  let ops: string[] = [];
-  let y = 0;
+  const fullWidth = right - left;
+  const colWidth = (fullWidth - GRID.gutter) / 2;
+  const ops: string[] = [];
 
-  const newPage = () => {
-    ops = [];
-    pages.push(ops);
-    y = PAGE.height - PAGE.margin;
-    if (pages.length === 1) {
-      // Header: title left, date right, both small bold tracked caps. Nothing else.
-      y -= HEAD.size;
-      ops.push(textOp(brief.title, left, y, "/F2", HEAD.size, HEAD.tracking));
-      const dateX = right - textWidth(brief.date, HEAD.size, HEAD.tracking);
-      ops.push(textOp(brief.date, dateX, y, "/F2", HEAD.size, HEAD.tracking));
-      y -= BODY.leading * 2;
-    }
-  };
-  const ensure = (needed: number) => {
-    if (y - needed < bottom) newPage();
-  };
+  // Header: title left, date right — small bold letterspaced mono caps.
+  let y = PAGE.height - PAGE.margin - HEAD.size;
+  ops.push(textOp(brief.title, left, y, F_MONO, HEAD.size, HEAD.tracking));
+  ops.push(textOp(brief.date, right - monoWidth(brief.date, HEAD.size, HEAD.tracking), y, F_MONO, HEAD.size, HEAD.tracking));
+  y -= GRID.headerGap;
 
-  newPage();
-  for (const line of brief.lines) {
-    if (line.style === "body") {
-      ensure(BODY.leading);
-      y -= BODY.leading;
-      if (line.text) ops.push(textOp(line.text, left, y, "/F1", BODY.size));
-      continue;
-    }
+  // Top row: two boxes sharing one height.
+  const [a, b, c] = brief.sections;
+  const la = layoutSection(a, colWidth);
+  const lb = layoutSection(b, colWidth);
+  const topHeight = Math.min(TOP_ROW.max, Math.max(TOP_ROW.min, la.height, lb.height));
+  drawBox(ops, left, y, colWidth, topHeight, a.label, la.lines);
+  drawBox(ops, left + colWidth + GRID.gutter, y, colWidth, topHeight, b.label, lb.lines);
+  y -= topHeight + GRID.gutter;
 
-    // Section heads: extra air above, small bold tracked caps, then a beat before the body.
-    const isJournal = line.style === "journal";
-    ensure(HEAD.spaceAbove + BODY.leading * 2 + (isJournal ? RULING.minSpace : 0));
-    y -= HEAD.spaceAbove + HEAD.size;
-    ops.push(textOp(line.text, left, y, "/F2", HEAD.size, HEAD.tracking));
-    y -= BODY.leading - HEAD.size;
+  // Middle row: full-width affirmations.
+  const lc = layoutSection(c, fullWidth);
+  const midHeight = Math.min(MIDDLE_ROW.max, Math.max(MIDDLE_ROW.min, lc.height));
+  drawBox(ops, left, y, fullWidth, midHeight, c.label, lc.lines);
+  y -= midHeight + GRID.gutter;
 
-    if (isJournal) {
-      // Morning pages: faint rules down to the bottom margin, then the page is spent.
-      ops.push(`${RULING.gray} G ${RULING.width} w`);
-      for (let ry = y - RULING.gap; ry >= bottom; ry -= RULING.gap) {
-        ops.push(`${left} ${ry.toFixed(1)} m ${right} ${ry.toFixed(1)} l S`);
-      }
-      y = bottom;
-    }
+  // Bottom: journaling takes whatever is left, ruled for handwriting.
+  const journalHeight = y - bottom;
+  drawBox(ops, left, y, fullWidth, journalHeight, brief.journal, []);
+  ops.push(`${RULING.gray} G ${RULING.width} w`);
+  const firstRule = y - GRID.pad - LABEL.size - RULING.gap;
+  for (let ry = firstRule; ry >= bottom + GRID.pad; ry -= RULING.gap) {
+    ops.push(`${left + GRID.pad} ${ry.toFixed(1)} m ${right - GRID.pad} ${ry.toFixed(1)} l S`);
   }
 
   const objects: string[] = [];
-  const add = (body: string) => objects.push(body) && objects.length; // 1-based object number
-  const catalog = add(""); // placeholders filled after page objects exist
-  const pagesObj = add("");
-  const regular = add("<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>");
-  const bold = add("<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>");
-
-  const pageIds: number[] = [];
-  for (const page of pages) {
-    const stream = page.join("\n");
-    const content = add(`<< /Length ${Buffer.byteLength(stream, "latin1")} >>\nstream\n${stream}\nendstream`);
-    pageIds.push(
-      add(
-        `<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${PAGE.width} ${PAGE.height}] ` +
-          `/Resources << /Font << /F1 ${regular} 0 R /F2 ${bold} 0 R >> >> /Contents ${content} 0 R >>`,
-      ),
-    );
-  }
-
+  const addObj = (body: string) => objects.push(body) && objects.length; // 1-based object number
+  const catalog = addObj(""); // placeholders filled once the page object exists
+  const pagesObj = addObj("");
+  const mono = addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>");
+  const sans = addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
+  const stream = ops.join("\n");
+  const content = addObj(`<< /Length ${Buffer.byteLength(stream, "latin1")} >>\nstream\n${stream}\nendstream`);
+  const page = addObj(
+    `<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${PAGE.width} ${PAGE.height}] ` +
+      `/Resources << /Font << ${F_MONO} ${mono} 0 R ${F_SANS} ${sans} 0 R >> >> /Contents ${content} 0 R >>`,
+  );
   objects[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
-  objects[pagesObj - 1] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
+  objects[pagesObj - 1] = `<< /Type /Pages /Kids [${page} 0 R] /Count 1 >>`;
 
   let body = "%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n";
   const offsets: number[] = [];
@@ -458,7 +489,8 @@ export function main(argv: string[]): number {
   writeFileSync(pdfPath, toPdf(brief));
 
   if (args["dry-run"]) {
-    process.stdout.write(`dry-run: rendered ${brief.lines.length} lines to ${pdfPath} (+ ${txtPath}); nothing sent to printer\n`);
+    const items = brief.sections.reduce((n, s) => n + s.items.length, 0);
+    process.stdout.write(`dry-run: rendered ${items} items to ${pdfPath} (+ ${txtPath}); nothing sent to printer\n`);
     return 0;
   }
 
