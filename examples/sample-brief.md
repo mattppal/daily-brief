@@ -1,23 +1,22 @@
-# Daily Brief — Monday
+# Daily Brief
 
-## Calendar
+## Events
 
-- 09:00 Standup (30 min)
-- 11:30 **1:1 with Eng** — review print routine
+- 09:00 Standup
+- 11:30 1:1 with Eng — review the print routine
 - 14:00 Dentist
+- 18:30 Dinner with Sam
 
-## Top 3
+## Interesting things to think about
 
-1. Ship the printer handoff
-2. Reply to the *vendor* thread
-3. Book flights for October
+- What would this project look like if it were easy?
+- The best interface is the one you stop noticing.
+- Constraints are a gift: one page, one printer, one morning.
 
-## Notes
+## Affirmations
 
-> Weather: 62°F, light rain after 3pm. Bring the jacket.
+- I do the next small thing well.
+- Attention is the only currency I actually spend.
+- Today is enough.
 
-Reading: [CUPS docs](https://openprinting.github.io/cups/) for `lpadmin -m everywhere`.
-
----
-
-Printed by Eng at 06:45.
+## Journaling / Observations / Thoughts

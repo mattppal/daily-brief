@@ -26,14 +26,15 @@ const EXIT_LP_FAILED = 4;
 
 const LP_TIMEOUT_MS = 30_000;
 
-// Page layout: US Letter, 1" margins, Courier 11pt on a 15pt leading.
+// Page layout: US Letter, 1" margins, uppercase Courier throughout.
 const PAGE = { width: 612, height: 792, margin: 72 };
-const FONT_SIZE = 11;
-const TITLE_SIZE = 14;
-const LEADING = 15;
+const BODY = { size: 10, leading: 15 };
+const HEAD = { size: 8, tracking: 1.5, spaceAbove: 18 }; // section heads: small, bold, letterspaced
 // Courier glyphs are 0.6em wide; keep lines comfortably inside the text block.
-const LINE_WIDTH = Math.floor((PAGE.width - 2 * PAGE.margin) / (FONT_SIZE * 0.6)) - 2; // 68
-const RULE_WIDTH = 24;
+const LINE_WIDTH = Math.floor((PAGE.width - 2 * PAGE.margin) / (BODY.size * 0.6)) - 4; // 74
+// Morning-pages ruling for the journaling section.
+const RULING = { gap: 24, gray: 0.8, width: 0.4, minSpace: 240 };
+const JOURNAL_HEADING = "Journaling / Observations / Thoughts";
 
 // Paper default for `lp`. LP_OPTIONS is appended after this, so Matt's values win
 // (e.g. `-o sides=one-sided`). Margins/fonts live in the PDF, not in lp options.
@@ -67,8 +68,11 @@ function loadDotenv(path: string): void {
 
 // ---------------------------------------------------------------- Markdown → lines
 
-type Style = "title" | "heading" | "body";
+// "journal" marks the heading of the morning-pages section: the PDF rules the rest of the
+// page below it for handwriting.
+type Style = "heading" | "body" | "journal";
 type Line = { text: string; style: Style };
+export type Brief = { title: string; date: string; lines: Line[] };
 
 const INLINE_PATTERNS: Array<[RegExp, string]> = [
   [/\*\*(.+?)\*\*/g, "$1"],
@@ -103,17 +107,24 @@ function wrap(text: string, first = "", rest = " ".repeat(first.length)): string
   return lines;
 }
 
+function longDate(): string {
+  return new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
 /**
- * Convert a Markdown subset to styled plain-text lines. `#` becomes the page title and
- * `##` uppercase section headings; lists use `•` / `1.`; emphasis/code/link syntax is
- * stripped; prose is word-wrapped; fenced code blocks are indented verbatim.
+ * Convert a Markdown subset to an uppercase, styled brief. The first `#` is the page title
+ * (default "Daily Brief"); `##` are section headings; lists keep `•` / `1.`; emphasis, code,
+ * link and rule syntax is stripped; prose is word-wrapped. A heading starting with
+ * "journal" (appended if missing) becomes the ruled morning-pages section.
  */
-export function renderMarkdown(md: string): Line[] {
+export function renderMarkdown(md: string): Brief {
   const out: Line[] = [];
+  let title = "Daily Brief";
+  let hasJournal = false;
   let inCode = false;
   const last = () => out[out.length - 1]?.text;
   const push = (texts: string[], style: Style = "body") => {
-    for (const text of texts) out.push({ text, style });
+    for (const text of texts) out.push({ text: text.toUpperCase(), style });
   };
   const blankBefore = () => {
     if (out.length && last() !== "") push([""]);
@@ -132,18 +143,23 @@ export function renderMarkdown(md: string): Line[] {
 
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
-      const level = heading[1].length;
-      const title = inline(heading[2]).trim();
+      const text = inline(heading[2]).trim();
+      if (heading[1].length === 1) {
+        title = text;
+        continue;
+      }
       blankBefore();
-      if (level === 1) push([title.toUpperCase()], "title");
-      else if (level === 2) push([title.toUpperCase()], "heading");
-      else push([title], "heading");
+      if (/^journal/i.test(text)) {
+        hasJournal = true;
+        push([text], "journal");
+      } else {
+        push([text], "heading");
+      }
       continue;
     }
 
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
       blankBefore();
-      push(["-".repeat(RULE_WIDTH)]);
       continue;
     }
 
@@ -170,14 +186,23 @@ export function renderMarkdown(md: string): Line[] {
     push(line.trim() ? wrap(inline(line)) : [""]);
   }
 
-  // Trim leading/trailing blanks and collapse runs of blank lines.
+  if (out.some((l) => l.text.trim()) && !hasJournal) {
+    blankBefore();
+    push([JOURNAL_HEADING], "journal");
+  }
+
+  // Trim leading/trailing blanks, collapse runs of blank lines, and drop blanks right after
+  // a heading (the PDF already spaces headings; the text file reads fine without them).
   while (out.length && out[0].text === "") out.shift();
   while (out.length && out[out.length - 1].text === "") out.pop();
-  return out.filter((l, i) => !(l.text === "" && i > 0 && out[i - 1].text === ""));
+  const lines = out.filter((l, i) => !(l.text === "" && i > 0 && (out[i - 1].text === "" || out[i - 1].style !== "body")));
+  return { title: title.toUpperCase(), date: longDate().toUpperCase(), lines };
 }
 
-export function toText(lines: Line[]): string {
-  return lines.length ? lines.map((l) => l.text).join("\n") + "\n" : "";
+export function toText(brief: Brief): string {
+  if (!brief.lines.some((l) => l.text.trim())) return "";
+  const body = brief.lines.map((l) => (l.style === "journal" ? `${l.text}\n\n${"_".repeat(LINE_WIDTH)}` : l.text));
+  return [`${brief.title}  ·  ${brief.date}`, "", ...body].join("\n") + "\n";
 }
 
 // ---------------------------------------------------------------- lines → PDF
@@ -200,16 +225,69 @@ function pdfString(text: string): string {
   return `(${s})`;
 }
 
-export function toPdf(lines: Line[]): Buffer {
-  const usable = PAGE.height - 2 * PAGE.margin;
-  const perPage = Math.floor(usable / LEADING);
-  const pages: Line[][] = [];
-  for (let i = 0; i < lines.length; i += perPage) pages.push(lines.slice(i, i + perPage));
-  if (!pages.length) pages.push([]);
+/** Width of `text` set in Courier at `size` with `tracking` points between glyphs. */
+function textWidth(text: string, size: number, tracking = 0): number {
+  const n = [...text].length;
+  return n * size * 0.6 + Math.max(0, n - 1) * tracking;
+}
+
+function textOp(text: string, x: number, y: number, font: "/F1" | "/F2", size: number, tracking = 0): string {
+  return `BT ${font} ${size} Tf ${tracking} Tc 1 0 0 1 ${x.toFixed(1)} ${y.toFixed(1)} Tm ${pdfString(text)} Tj ET`;
+}
+
+export function toPdf(brief: Brief): Buffer {
+  const left = PAGE.margin;
+  const right = PAGE.width - PAGE.margin;
+  const bottom = PAGE.margin;
+  const pages: string[][] = [];
+  let ops: string[] = [];
+  let y = 0;
+
+  const newPage = () => {
+    ops = [];
+    pages.push(ops);
+    y = PAGE.height - PAGE.margin;
+    if (pages.length === 1) {
+      // Header: title left, date right, both small bold tracked caps. Nothing else.
+      y -= HEAD.size;
+      ops.push(textOp(brief.title, left, y, "/F2", HEAD.size, HEAD.tracking));
+      const dateX = right - textWidth(brief.date, HEAD.size, HEAD.tracking);
+      ops.push(textOp(brief.date, dateX, y, "/F2", HEAD.size, HEAD.tracking));
+      y -= BODY.leading * 2;
+    }
+  };
+  const ensure = (needed: number) => {
+    if (y - needed < bottom) newPage();
+  };
+
+  newPage();
+  for (const line of brief.lines) {
+    if (line.style === "body") {
+      ensure(BODY.leading);
+      y -= BODY.leading;
+      if (line.text) ops.push(textOp(line.text, left, y, "/F1", BODY.size));
+      continue;
+    }
+
+    // Section heads: extra air above, small bold tracked caps, then a beat before the body.
+    const isJournal = line.style === "journal";
+    ensure(HEAD.spaceAbove + BODY.leading * 2 + (isJournal ? RULING.minSpace : 0));
+    y -= HEAD.spaceAbove + HEAD.size;
+    ops.push(textOp(line.text, left, y, "/F2", HEAD.size, HEAD.tracking));
+    y -= BODY.leading - HEAD.size;
+
+    if (isJournal) {
+      // Morning pages: faint rules down to the bottom margin, then the page is spent.
+      ops.push(`${RULING.gray} G ${RULING.width} w`);
+      for (let ry = y - RULING.gap; ry >= bottom; ry -= RULING.gap) {
+        ops.push(`${left} ${ry.toFixed(1)} m ${right} ${ry.toFixed(1)} l S`);
+      }
+      y = bottom;
+    }
+  }
 
   const objects: string[] = [];
   const add = (body: string) => objects.push(body) && objects.length; // 1-based object number
-
   const catalog = add(""); // placeholders filled after page objects exist
   const pagesObj = add("");
   const regular = add("<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>");
@@ -217,18 +295,7 @@ export function toPdf(lines: Line[]): Buffer {
 
   const pageIds: number[] = [];
   for (const page of pages) {
-    const ops: string[] = ["BT"];
-    let y = PAGE.height - PAGE.margin - FONT_SIZE;
-    for (const line of page) {
-      if (line.text) {
-        const font = line.style === "body" ? "/F1" : "/F2";
-        const size = line.style === "title" ? TITLE_SIZE : FONT_SIZE;
-        ops.push(`${font} ${size} Tf 1 0 0 1 ${PAGE.margin} ${y.toFixed(1)} Tm ${pdfString(line.text)} Tj`);
-      }
-      y -= LEADING;
-    }
-    ops.push("ET");
-    const stream = ops.join("\n");
+    const stream = page.join("\n");
     const content = add(`<< /Length ${Buffer.byteLength(stream, "latin1")} >>\nstream\n${stream}\nendstream`);
     pageIds.push(
       add(
@@ -375,8 +442,8 @@ export function main(argv: string[]): number {
 
   loadDotenv(args["env-file"]!);
 
-  const lines = renderMarkdown(readSource(args.input));
-  const text = toText(lines);
+  const brief = renderMarkdown(readSource(args.input));
+  const text = toText(brief);
   if (!text.trim()) {
     process.stderr.write("print_brief: brief content is empty; refusing to print a blank page\n");
     return EXIT_EMPTY;
@@ -388,10 +455,10 @@ export function main(argv: string[]): number {
   const txtPath = pdfPath.replace(/\.pdf$/i, "") + ".txt";
   mkdirSync(dirname(pdfPath), { recursive: true });
   writeFileSync(txtPath, text, "utf8");
-  writeFileSync(pdfPath, toPdf(lines));
+  writeFileSync(pdfPath, toPdf(brief));
 
   if (args["dry-run"]) {
-    process.stdout.write(`dry-run: rendered ${lines.length} lines to ${pdfPath} (+ ${txtPath}); nothing sent to printer\n`);
+    process.stdout.write(`dry-run: rendered ${brief.lines.length} lines to ${pdfPath} (+ ${txtPath}); nothing sent to printer\n`);
     return 0;
   }
 
