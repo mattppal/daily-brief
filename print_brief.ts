@@ -11,9 +11,8 @@
  *   3 printer queue not found     4 `lp` failed or timed out
  *
  * Uses only `node:` built-ins so it also runs under `node --experimental-strip-types`.
- * The PDF is written by hand with the built-in Courier-Bold (labels) and Helvetica (body)
- * fonts, so the file sent to `lp` prints identically on any host and can be previewed
- * before anything hits paper.
+ * The PDF is written by hand with the built-in Helvetica family, so the file sent to `lp`
+ * prints identically on any host and can be previewed before anything hits paper.
  */
 
 import { spawnSync } from "node:child_process";
@@ -27,19 +26,19 @@ const EXIT_LP_FAILED = 4;
 
 const LP_TIMEOUT_MS = 30_000;
 
-// Page: US Letter portrait, 1" margins. Header is letterspaced Courier-Bold caps; box
-// labels reuse that style one point smaller; body copy is Helvetica.
+// Page: US Letter portrait, 1" margins, Helvetica throughout. Stationery feel: quiet
+// tracked-caps header and card labels in gray, black body copy, hairline rounded cards.
 const PAGE = { width: 612, height: 792, margin: 72 };
-const HEAD = { size: 8, tracking: 1.5 };
-const LABEL = { size: 7, tracking: 1.5 };
+const HEAD = { size: 9, tracking: 2.2, gray: 0.35 };
+const LABEL = { size: 7, tracking: 1.4, gray: 0.45 };
 const BODY = { size: 10, leading: 14 };
-// Bento grid: two boxes on top, full-width affirmations, journaling takes the rest.
-const GRID = { gutter: 12, pad: 12, border: 0.6, headerGap: 22, labelGap: 18 };
-const TOP_ROW = { min: 132, max: 240 };
-const MIDDLE_ROW = { min: 62, max: 120 };
-// Morning-pages ruling inside the journaling box.
-const RULING = { gap: 24, gray: 0.8, width: 0.4 };
-const DEFAULT_SECTIONS = ["Events", "Interesting things to think about", "Affirmations"];
+// Bento grid: 2×2 cards (Events | Think, Affirmations | Physical health), then journaling
+// takes whatever height is left. Rows size to content within [min, max].
+const GRID = { gutter: 14, pad: 14, radius: 8, border: 0.5, borderGray: 0.6, headerGap: 24, labelGap: 18 };
+const ROW = { min: 108, max: 168 };
+// Notebook-style ruling inside the journaling card: light, even, with air under the label.
+const RULING = { gap: 22, gray: 0.86, width: 0.35, topMargin: 30 };
+const DEFAULT_SECTIONS = ["Events", "Interesting things to think about", "Affirmations", "Physical health"];
 const JOURNAL_HEADING = "Journaling / Observations / Thoughts";
 const TEXT_WIDTH = 72; // wrap width for the .txt companion file
 
@@ -166,8 +165,9 @@ export function renderMarkdown(md: string): Brief {
     if (line.trim()) add("", inline(line));
   }
 
-  const filled = sections.filter((s) => s.items.length || sections.indexOf(s) < 3);
-  while (filled.length < 3) filled.push({ label: DEFAULT_SECTIONS[filled.length], items: [] });
+  const slots = DEFAULT_SECTIONS.length;
+  const filled = sections.filter((s) => s.items.length || sections.indexOf(s) < slots);
+  while (filled.length < slots) filled.push({ label: DEFAULT_SECTIONS[filled.length], items: [] });
   return { title: title.toUpperCase(), date: longDate().toUpperCase(), sections: filled, journal };
 }
 
@@ -251,16 +251,29 @@ function helveticaWidth(text: string, size: number): number {
   return (units / 1000) * size;
 }
 
-function monoWidth(text: string, size: number, tracking: number): number {
-  const n = [...text].length;
-  return n * size * 0.6 + Math.max(0, n - 1) * tracking;
+function trackedWidth(text: string, size: number, tracking: number): number {
+  return helveticaWidth(text, size) + Math.max(0, [...text].length - 1) * tracking;
 }
 
-const F_MONO = "/F1";
-const F_SANS = "/F2";
+const F_SANS = "/F1";
+const F_SANS_BOLD = "/F2";
 
-function textOp(text: string, x: number, y: number, font: string, size: number, tracking = 0): string {
-  return `BT ${font} ${size} Tf ${tracking} Tc 1 0 0 1 ${x.toFixed(1)} ${y.toFixed(1)} Tm ${pdfString(text)} Tj ET`;
+function textOp(text: string, x: number, y: number, font: string, size: number, tracking = 0, gray = 0): string {
+  return `BT ${gray} g ${font} ${size} Tf ${tracking} Tc 1 0 0 1 ${x.toFixed(1)} ${y.toFixed(1)} Tm ${pdfString(text)} Tj ET`;
+}
+
+/** Rounded-rectangle path (Bézier corners) stroked as a hairline. */
+function roundedRect(x: number, y: number, w: number, h: number, r: number): string {
+  const k = 0.5523 * r;
+  const f = (n: number) => n.toFixed(2);
+  return [
+    `${f(x + r)} ${f(y)} m`,
+    `${f(x + w - r)} ${f(y)} l ${f(x + w - r + k)} ${f(y)} ${f(x + w)} ${f(y + r - k)} ${f(x + w)} ${f(y + r)} c`,
+    `${f(x + w)} ${f(y + h - r)} l ${f(x + w)} ${f(y + h - r + k)} ${f(x + w - r + k)} ${f(y + h)} ${f(x + w - r)} ${f(y + h)} c`,
+    `${f(x + r)} ${f(y + h)} l ${f(x + r - k)} ${f(y + h)} ${f(x)} ${f(y + h - r + k)} ${f(x)} ${f(y + h - r)} c`,
+    `${f(x)} ${f(y + r)} l ${f(x)} ${f(y + r - k)} ${f(x + r - k)} ${f(y)} ${f(x + r)} ${f(y)} c`,
+    "h S",
+  ].join(" ");
 }
 
 /** Lines a section needs at `width`, plus the box height that would hold them all. */
@@ -271,11 +284,11 @@ function layoutSection(section: Section, width: number): { lines: string[]; heig
   return { lines, height };
 }
 
-/** Draw one bento box: border, mono caps label, and as many body lines as fit ("…" if clipped). */
+/** Draw one bento card: hairline rounded border, quiet caps label, and as many body lines as fit ("…" if clipped). */
 function drawBox(ops: string[], x: number, top: number, width: number, height: number, label: string, lines: string[]): void {
-  ops.push(`0 G ${GRID.border} w ${x} ${(top - height).toFixed(1)} ${width} ${height} re S`);
+  ops.push(`${GRID.borderGray} G ${GRID.border} w ${roundedRect(x, top - height, width, height, GRID.radius)}`);
   const labelY = top - GRID.pad - LABEL.size;
-  ops.push(textOp(label.toUpperCase(), x + GRID.pad, labelY, F_MONO, LABEL.size, LABEL.tracking));
+  ops.push(textOp(label.toUpperCase(), x + GRID.pad, labelY, F_SANS_BOLD, LABEL.size, LABEL.tracking, LABEL.gray));
   let y = labelY - GRID.labelGap;
   const bottom = top - height + GRID.pad;
   const fit = Math.max(0, Math.floor((y - bottom) / BODY.leading) + 1);
@@ -296,30 +309,27 @@ export function toPdf(brief: Brief): Buffer {
 
   // Header: title left, date right — small bold letterspaced mono caps.
   let y = PAGE.height - PAGE.margin - HEAD.size;
-  ops.push(textOp(brief.title, left, y, F_MONO, HEAD.size, HEAD.tracking));
-  ops.push(textOp(brief.date, right - monoWidth(brief.date, HEAD.size, HEAD.tracking), y, F_MONO, HEAD.size, HEAD.tracking));
+  ops.push(textOp(brief.title, left, y, F_SANS, HEAD.size, HEAD.tracking, HEAD.gray));
+  const dateX = right - trackedWidth(brief.date, HEAD.size, HEAD.tracking);
+  ops.push(textOp(brief.date, dateX, y, F_SANS, HEAD.size, HEAD.tracking, HEAD.gray));
   y -= GRID.headerGap;
 
-  // Top row: two boxes sharing one height.
-  const [a, b, c] = brief.sections;
-  const la = layoutSection(a, colWidth);
-  const lb = layoutSection(b, colWidth);
-  const topHeight = Math.min(TOP_ROW.max, Math.max(TOP_ROW.min, la.height, lb.height));
-  drawBox(ops, left, y, colWidth, topHeight, a.label, la.lines);
-  drawBox(ops, left + colWidth + GRID.gutter, y, colWidth, topHeight, b.label, lb.lines);
-  y -= topHeight + GRID.gutter;
+  // 2×2 cards; each row shares one height sized to its taller card.
+  for (let i = 0; i + 1 < brief.sections.length; i += 2) {
+    const [l, r] = [brief.sections[i], brief.sections[i + 1]];
+    const ll = layoutSection(l, colWidth);
+    const lr = layoutSection(r, colWidth);
+    const rowHeight = Math.min(ROW.max, Math.max(ROW.min, ll.height, lr.height));
+    drawBox(ops, left, y, colWidth, rowHeight, l.label, ll.lines);
+    drawBox(ops, left + colWidth + GRID.gutter, y, colWidth, rowHeight, r.label, lr.lines);
+    y -= rowHeight + GRID.gutter;
+  }
 
-  // Middle row: full-width affirmations.
-  const lc = layoutSection(c, fullWidth);
-  const midHeight = Math.min(MIDDLE_ROW.max, Math.max(MIDDLE_ROW.min, lc.height));
-  drawBox(ops, left, y, fullWidth, midHeight, c.label, lc.lines);
-  y -= midHeight + GRID.gutter;
-
-  // Bottom: journaling takes whatever is left, ruled for handwriting.
+  // Journaling takes whatever is left, ruled like a notebook page.
   const journalHeight = y - bottom;
   drawBox(ops, left, y, fullWidth, journalHeight, brief.journal, []);
   ops.push(`${RULING.gray} G ${RULING.width} w`);
-  const firstRule = y - GRID.pad - LABEL.size - RULING.gap;
+  const firstRule = y - GRID.pad - LABEL.size - RULING.topMargin;
   for (let ry = firstRule; ry >= bottom + GRID.pad; ry -= RULING.gap) {
     ops.push(`${left + GRID.pad} ${ry.toFixed(1)} m ${right - GRID.pad} ${ry.toFixed(1)} l S`);
   }
@@ -328,13 +338,13 @@ export function toPdf(brief: Brief): Buffer {
   const addObj = (body: string) => objects.push(body) && objects.length; // 1-based object number
   const catalog = addObj(""); // placeholders filled once the page object exists
   const pagesObj = addObj("");
-  const mono = addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>");
   const sans = addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
+  const sansBold = addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>");
   const stream = ops.join("\n");
   const content = addObj(`<< /Length ${Buffer.byteLength(stream, "latin1")} >>\nstream\n${stream}\nendstream`);
   const page = addObj(
     `<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${PAGE.width} ${PAGE.height}] ` +
-      `/Resources << /Font << ${F_MONO} ${mono} 0 R ${F_SANS} ${sans} 0 R >> >> /Contents ${content} 0 R >>`,
+      `/Resources << /Font << ${F_SANS} ${sans} 0 R ${F_SANS_BOLD} ${sansBold} 0 R >> >> /Contents ${content} 0 R >>`,
   );
   objects[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
   objects[pagesObj - 1] = `<< /Type /Pages /Kids [${page} 0 R] /Count 1 >>`;
